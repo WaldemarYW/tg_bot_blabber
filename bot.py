@@ -1,6 +1,8 @@
 
 import os, asyncio, time, csv
+import logging
 from dotenv import load_dotenv
+from logging_config import setup_logging
 
 from aiogram import Bot, Dispatcher, F
 from aiogram.client.default import DefaultBotProperties
@@ -15,6 +17,8 @@ from i18n import t
 
 # --------------- ENV & INIT ---------------
 load_dotenv()
+setup_logging()
+logger = logging.getLogger(__name__)
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 OWNER_ID = int(os.getenv("OWNER_ID", "0"))
@@ -276,9 +280,9 @@ def load_extensions():
             m = importlib.import_module(f"extensions.{mod}")
             if hasattr(m, "register"):
                 m.register(dp, bot, db, t, lang_for, OWNER_ID)
-                print(f"[ext] loaded: {mod}")
+                logger.info(f"[ext] loaded: {mod}")
         except Exception as e:
-            print(f"[ext] error loading {mod}: {e}")
+            logger.error(f"[ext] error loading {mod}: {e}")
 
 # --------------- ENTRYPOINT ---------------
 async def main():
