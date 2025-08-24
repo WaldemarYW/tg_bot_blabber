@@ -1,5 +1,5 @@
 
-import os, asyncio, time, csv
+import os, asyncio, time, csv, logging
 from dotenv import load_dotenv
 
 from aiogram import Bot, Dispatcher, F
@@ -21,6 +21,9 @@ OWNER_ID = int(os.getenv("OWNER_ID", "0"))
 LANG_DEFAULT = os.getenv("LANG", "ru")
 DB_PATH = os.getenv("DB_PATH", "./bot.db")
 EXTENSIONS = [m.strip() for m in (os.getenv("EXTENSIONS", "") or "").split(",") if m.strip()]
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 db = DB(DB_PATH)
 if OWNER_ID:
@@ -63,12 +66,14 @@ def has_access(message: Message) -> bool:
 @dp.message(CommandStart())
 async def start(message: Message):
     uid = message.from_user.id
+    logger.info("User %s: start", uid)
     db.upsert_user(uid, message.from_user.first_name or "", message.from_user.last_name or "", message.from_user.username or "", None)
     await message.answer(t(lang_for(uid), "start"), reply_markup=main_menu(uid))
 
 @dp.message(F.text.in_({"🌐 Язык: Русский", "🌐 Мова: Українська"}))
 async def switch_lang(message: Message):
     uid = message.from_user.id
+    logger.info("User %s: switch_lang", uid)
     cur = lang_for(uid)
     new = "uk" if cur == "ru" else "ru"
     db.set_user_lang(uid, new)
@@ -77,18 +82,24 @@ async def switch_lang(message: Message):
 # --------------- SEARCH (MEN) ---------------
 @dp.message(F.text.in_({"🔍 Поиск по ID (мужчины)", "🔍 Пошук за ID (чоловіки)"}))
 async def search_menu_entry(message: Message):
+    uid = message.from_user.id
+    logger.info("User %s: search_menu_entry", uid)
     if not has_access(message):
-        await message.answer(t(lang_for(message.from_user.id), "not_authorized"))
+        logger.warning("Access denied for user %s in search_menu_entry", uid)
+        await message.answer(t(lang_for(uid), "not_authorized"))
         return
-    await message.answer(t(lang_for(message.from_user.id), "search_enter_id"))
+    await message.answer(t(lang_for(uid), "search_enter_id"))
 
 @dp.message(F.text.regexp(r"^\d{10}$"))
 async def male_search(message: Message):
-    if not has_access(message):
-        await message.answer(t(lang_for(message.from_user.id), "not_authorized"))
-        return
     uid = message.from_user.id
+    logger.info("User %s: male_search", uid)
+    if not has_access(message):
+        logger.warning("Access denied for user %s in male_search", uid)
+        await message.answer(t(lang_for(uid), "not_authorized"))
+        return
     if not db.rate_limit_allowed(uid, int(time.time())):
+        logger.warning("Rate limit exceeded for user %s", uid)
         await message.answer(t(lang_for(uid), "rate_limited"))
         return
     male = message.text.strip()
@@ -97,6 +108,7 @@ async def male_search(message: Message):
 
 async def send_results(message: Message, male_id: str, offset: int):
     uid = message.from_user.id
+    logger.info("User %s: send_results male_id=%s offset=%s", uid, male_id, offset)
     lang = lang_for(uid)
     total = db.count_by_male(male_id)
     rows = db.search_by_male(male_id, limit=PAGE_SIZE, offset=offset)
@@ -107,6 +119,7 @@ async def send_results(message: Message, male_id: str, offset: int):
         try:
             await bot.copy_message(chat_id=uid, from_chat_id=row["chat_id"], message_id=row["message_id"])
         except Exception:
+            logger.error("Failed to copy message for user %s", uid, exc_info=True)
             await message.answer(row["text"] or "(no text)")
     new_offset = offset + PAGE_SIZE
     if new_offset < total:
@@ -118,6 +131,8 @@ async def send_results(message: Message, male_id: str, offset: int):
 
 @dp.callback_query(F.data.startswith("more:"))
 async def cb_more(call: CallbackQuery):
+    uid = call.from_user.id
+    logger.info("User %s: cb_more", uid)
     _, male_id, off = call.data.split(":")
     await send_results(call.message, male_id, int(off))
     await call.answer()
@@ -125,10 +140,12 @@ async def cb_more(call: CallbackQuery):
 # --------------- MY QUERIES ---------------
 @dp.message(F.text.in_({"🧾 Мои запросы", "🧾 Мої запити"}))
 async def my_queries(message: Message):
-    if not has_access(message):
-        await message.answer(t(lang_for(message.from_user.id), "not_authorized"))
-        return
     uid = message.from_user.id
+    logger.info("User %s: my_queries", uid)
+    if not has_access(message):
+        logger.warning("Access denied for user %s in my_queries", uid)
+        await message.answer(t(lang_for(uid), "not_authorized"))
+        return
     logs = db.get_user_searches(uid, 10)
     if not logs:
         await message.answer("—")
@@ -140,7 +157,9 @@ async def my_queries(message: Message):
 @dp.message(F.text.in_({"⚙️ Админ", "⚙️ Адмін"}))
 async def admin_menu(message: Message):
     uid = message.from_user.id
+    logger.info("User %s: admin_menu", uid)
     if not is_admin(uid):
+        logger.warning("Access denied for user %s in admin_menu", uid)
         await message.answer(t(lang_for(uid), "admin_only"))
         return
     lang = lang_for(uid)
@@ -157,7 +176,9 @@ async def admin_menu(message: Message):
 @dp.message(F.text.in_({"🔎 Поиск по женскому ID (из названия группы)", "🔎 Пошук за жіночим ID (з назви групи)"}))
 async def prompt_female(message: Message):
     uid = message.from_user.id
+    logger.info("User %s: prompt_female", uid)
     if not is_admin(uid):
+        logger.warning("Access denied for user %s in prompt_female", uid)
         await message.answer(t(lang_for(uid), "admin_only"))
         return
     await message.answer(t(lang_for(uid), "enter_female_id"))
@@ -165,7 +186,9 @@ async def prompt_female(message: Message):
 @dp.message(F.text.regexp(r"^f:\d{10}$|^\d{10}$"))
 async def handle_female_search(message: Message):
     uid = message.from_user.id
+    logger.info("User %s: handle_female_search", uid)
     if not is_admin(uid):
+        logger.warning("Access denied for user %s in handle_female_search", uid)
         return
     female_id = message.text[-10:]
     chats = [c for c in db.list_allowed_chats() if c["female_id"] == female_id]
@@ -178,7 +201,9 @@ async def handle_female_search(message: Message):
 @dp.message(F.text.in_({"📊 Статистика", "📊 Статистика"}))
 async def stats(message: Message):
     uid = message.from_user.id
+    logger.info("User %s: stats", uid)
     if not is_admin(uid):
+        logger.warning("Access denied for user %s in stats", uid)
         await message.answer(t(lang_for(uid), "admin_only"))
         return
     men, msgs, chats = db.count_stats()
@@ -187,7 +212,9 @@ async def stats(message: Message):
 @dp.message(F.text.in_({"💾 Экспорт", "💾 Експорт"}))
 async def export_menu(message: Message):
     uid = message.from_user.id
+    logger.info("User %s: export_menu", uid)
     if not is_admin(uid):
+        logger.warning("Access denied for user %s in export_menu", uid)
         return
     lang = lang_for(uid)
     kb = InlineKeyboardBuilder()
@@ -198,7 +225,9 @@ async def export_menu(message: Message):
 @dp.callback_query(F.data.startswith("export:"))
 async def cb_export(call: CallbackQuery):
     uid = call.from_user.id
+    logger.info("User %s: cb_export", uid)
     if not is_admin(uid):
+        logger.warning("Access denied for user %s in cb_export", uid)
         await call.answer("")
         return
     kind = call.data.split(":")[1]
@@ -207,18 +236,24 @@ async def cb_export(call: CallbackQuery):
         await call.message.answer(t(lang_for(uid), "enter_male_id"))
         await call.answer("")
     else:
-        await bot.send_document(uid, document=open(DB_PATH, "rb"), caption="DB dump (SQLite)")
+        try:
+            await bot.send_document(uid, document=open(DB_PATH, "rb"), caption="DB dump (SQLite)")
+        except Exception:
+            logger.error("Failed to send DB dump to user %s", uid, exc_info=True)
         await call.answer("OK")
 
 @dp.message(F.text.regexp(r"^\d{10}$"))
 async def export_male_csv(message: Message):
     uid = message.from_user.id
+    logger.info("User %s: export_male_csv", uid)
     if ADM_PENDING.get(uid) != "export_male":
+        logger.warning("Unexpected export_male_csv by user %s", uid)
         return
     ADM_PENDING.pop(uid, None)
     male = message.text.strip()
     rows = db.search_by_male(male, limit=10**9, offset=0)
     if not rows:
+        logger.warning("No rows for male %s requested by user %s", male, uid)
         await message.answer(t(lang_for(uid), "search_not_found"))
         return
     fname = f"export_{male}.csv"
@@ -227,12 +262,18 @@ async def export_male_csv(message: Message):
         w.writerow(["chat_id","message_id","date","text","media_type","sender_id","sender_username","male_id"])
         for r in rows:
             w.writerow([r["chat_id"], r["message_id"], r["date"], (r["text"] or "").replace("\n"," "), r["media_type"], r["sender_id"], r["sender_username"], r["male_id"]])
-    await bot.send_document(uid, document=open(fname, "rb"), caption=f"CSV для {male}")
+    try:
+        await bot.send_document(uid, document=open(fname, "rb"), caption=f"CSV для {male}")
+    except Exception:
+        logger.error("Failed to send CSV for male %s to user %s", male, uid, exc_info=True)
 
 # --------------- GROUP LISTENERS ---------------
 @dp.message(F.chat.type.in_({ChatType.GROUP, ChatType.SUPERGROUP}))
 async def on_group_message(message: Message):
+    uid = message.from_user.id if message.from_user else None
+    logger.info("Group message user=%s chat=%s", uid, message.chat.id)
     if db.get_allowed_chat(message.chat.id) is None:
+        logger.warning("Message in unauthorized chat %s from user %s", message.chat.id, uid)
         return
     text, media_type, file_id, is_forward = extract_text_and_media(message)
     if not text:
@@ -256,7 +297,10 @@ async def on_group_message(message: Message):
 
 @dp.edited_message(F.chat.type.in_({ChatType.GROUP, ChatType.SUPERGROUP}))
 async def on_group_edited(message: Message):
+    uid = message.from_user.id if message.from_user else None
+    logger.info("Group edit user=%s chat=%s", uid, message.chat.id)
     if db.get_allowed_chat(message.chat.id) is None:
+        logger.warning("Edit in unauthorized chat %s from user %s", message.chat.id, uid)
         return
     text, media_type, file_id, is_forward = extract_text_and_media(message)
     msg_row = db.conn.execute("SELECT id FROM messages WHERE chat_id=? AND message_id=?", (message.chat.id, message.message_id)).fetchone()
@@ -276,9 +320,9 @@ def load_extensions():
             m = importlib.import_module(f"extensions.{mod}")
             if hasattr(m, "register"):
                 m.register(dp, bot, db, t, lang_for, OWNER_ID)
-                print(f"[ext] loaded: {mod}")
+                logger.info("[ext] loaded: %s", mod)
         except Exception as e:
-            print(f"[ext] error loading {mod}: {e}")
+            logger.error("[ext] error loading %s: %s", mod, e, exc_info=True)
 
 # --------------- ENTRYPOINT ---------------
 async def main():
